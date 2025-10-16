@@ -67,6 +67,8 @@ export const getAllNews = async (req, res) => {
       },
     });
 
+    
+    
     const formattedNews = news.map((item) => {
       const json = item.toJSON();
       return {
