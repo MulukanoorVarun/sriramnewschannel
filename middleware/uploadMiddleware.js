@@ -1,8 +1,8 @@
+// middleware/uploadMiddleware.js
 import multer from "multer";
-import path from "path";
 import fs from "fs";
+import path from "path";
 
-// Create upload folders if they don't exist
 const createFolder = (folder) => {
   if (!fs.existsSync(folder)) {
     fs.mkdirSync(folder, { recursive: true });
@@ -12,8 +12,15 @@ const createFolder = (folder) => {
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     let folder = "uploads/others";
-    if (file.mimetype.startsWith("image")) folder = "uploads/images";
-    else if (file.mimetype.startsWith("video")) folder = "uploads/videos";
+
+    // ✅ Force banners to go in /banners folder
+    if (req.originalUrl.includes("/admin/banners")) {
+      folder = "uploads/banners";
+    } else if (file.mimetype.startsWith("image")) {
+      folder = "uploads/images";
+    } else if (file.mimetype.startsWith("video")) {
+      folder = "uploads/videos";
+    }
 
     createFolder(folder);
     cb(null, folder);

@@ -1,29 +1,18 @@
-// src/routes/admin/adminUserRoutes.js
 import express from "express";
-import {
-  getAllUsers,
-  getUserById,
-  updateUser,
-  deleteUser,
+import { authenticate, authorizeRoles } from "../../middleware/authMiddleware.js";
+import { 
+  getAllUsers, 
+  getUserById, 
+  updateUser, 
+  deleteUser 
 } from "../../controllers/admin/adminUserController.js";
-
-import { authenticate, adminOnly } from "../../middleware/authMiddleware.js";
 
 const router = express.Router();
 
-// Protect all routes: only authenticated admins
-router.use(authenticate, adminOnly);
-
-// Get all users
-router.get("/", getAllUsers);
-
-// Get single user by ID
-router.get("/:id", getUserById);
-
-// Update user by ID
-router.put("/:id", updateUser);
-
-// Delete user by ID
-router.delete("/:id", deleteUser);
+// ✅ All routes are admin protected
+router.get("/", authenticate, authorizeRoles("admin"), getAllUsers); // Get all users
+router.get("/:id", authenticate, authorizeRoles("admin"), getUserById); // Get single user
+router.put("/:id", authenticate, authorizeRoles("admin"), updateUser); // Update user
+router.delete("/:id", authenticate, authorizeRoles("admin"), deleteUser); // Delete user
 
 export default router;

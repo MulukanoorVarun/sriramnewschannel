@@ -126,3 +126,6 @@ export const deleteNews = async (req, res) => {
     return sendResponse(res, false, err.message, null, 500);
   }
 };
+
+
+

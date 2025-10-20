@@ -3,6 +3,7 @@ import News from "../../models/News.js";
 import Bookmark from "../../models/Bookmark.js";
 import { sendResponse } from "../../src/utils/responseHelper.js";
 import NewsView from "../../models/NewsView.js";
+import Like from "../../models/Like.js";  
 
 /**
  * Helper to build full file URLs
@@ -19,33 +20,51 @@ const buildFileUrl = (req, filePath) => {
 export const getAllNews = async (req, res) => {
   try {
     const userId = req.user?.id || 0;
-    const guestId = req.headers["x-guest-id"] || null; // guest identifier
-    console.log("Current userId:", userId, "GuestId:", guestId);
+    const guestId = req.headers["x-guest-id"] || null;
 
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
     const offset = (page - 1) * limit;
-    const { categoryId, search } = req.query;
+    const { categoryId, search, type } = req.query;
 
-    const whereClause = {};
-    if (categoryId) whereClause.categoryId = categoryId;
-    if (search) {
-      whereClause[Op.or] = [
-        { title: { [Op.like]: `%${search}%` } },
-        { description: { [Op.like]: `%${search}%` } },
-      ];
+    // Filter
+    let order = [["createdAt", "DESC"]];
+    let dateFilter = {};
+
+    if (type === "trending") {
+      const lastWeek = new Date();
+      lastWeek.setDate(lastWeek.getDate() - 7);
+      dateFilter = { createdAt: { [Op.gte]: lastWeek } };
+      order = [[Sequelize.literal("views_count"), "DESC"]];
     }
+
+    if (type === "topmost") {
+      order = [[Sequelize.literal("likes_count"), "DESC"]];
+    }
+
+    const whereClause = {
+      ...dateFilter,
+      ...(categoryId ? { categoryId } : {}),
+      ...(search
+        ? {
+            [Op.or]: [
+              { title: { [Op.like]: `%${search}%` } },
+              { description: { [Op.like]: `%${search}%` } },
+            ],
+          }
+        : {}),
+    };
 
     const totalCount = await News.count({ where: whereClause });
 
     const news = await News.findAll({
       where: whereClause,
-      order: [["createdAt", "DESC"]],
+      order,
       limit,
       offset,
       attributes: {
         include: [
-          // Check if bookmarked
+          // Bookmark status
           [
             Sequelize.literal(`CASE 
               WHEN EXISTS (
@@ -55,7 +74,17 @@ export const getAllNews = async (req, res) => {
               ) THEN TRUE ELSE FALSE END`),
             "is_bookmarked",
           ],
-          // Count total views
+          // Like status
+          [
+            Sequelize.literal(`CASE 
+              WHEN EXISTS (
+                SELECT 1 FROM ${Like.getTableName()} AS likes
+                WHERE likes.newsId = News.id
+                AND likes.userId = ${userId}
+              ) THEN TRUE ELSE FALSE END`),
+            "is_liked",
+          ],
+          // Views count
           [
             Sequelize.literal(`(
               SELECT COUNT(*) FROM ${NewsView.getTableName()} AS nv
@@ -63,12 +92,18 @@ export const getAllNews = async (req, res) => {
             )`),
             "views_count",
           ],
+          // Likes count
+          [
+            Sequelize.literal(`(
+              SELECT COUNT(*) FROM ${Like.getTableName()} AS lk
+              WHERE lk.newsId = News.id
+            )`),
+            "likes_count",
+          ],
         ],
       },
     });
 
-    
-    
     const formattedNews = news.map((item) => {
       const json = item.toJSON();
       return {
@@ -76,7 +111,9 @@ export const getAllNews = async (req, res) => {
         imageUrl: buildFileUrl(req, json.imageUrl),
         videoUrl: buildFileUrl(req, json.videoUrl),
         is_bookmarked: Boolean(json.is_bookmarked),
+        is_liked: Boolean(json.is_liked),
         views_count: parseInt(json.views_count) || 0,
+        likes_count: parseInt(json.likes_count) || 0,
       };
     });
 
@@ -158,6 +195,38 @@ export const getNewsById = async (req, res) => {
     return sendResponse(res, true, "News fetched successfully", formattedNews);
   } catch (err) {
     console.error("Error in getNewsById:", err);
+    return sendResponse(res, false, err.message, null, 500);
+  }
+};
+
+
+export const toggleLike = async (req, res) => {
+  try {
+    const userId = req.user?.id;
+    if (!userId) return sendResponse(res, false, "Unauthorized", null, 401);
+
+    const { newsId } = req.body;
+    if (!newsId) return sendResponse(res, false, "newsId is required", null, 400);
+
+    // ✅ Check if the news item exists
+    const newsExists = await News.findByPk(newsId);
+    if (!newsExists)
+      return sendResponse(res, false, "News not found for the provided newsId", null, 404);
+
+    // ✅ Check if the user already liked this news
+    const existingLike = await Like.findOne({ where: { userId, newsId } });
+
+    if (existingLike) {
+      // Unlike
+      await existingLike.destroy();
+      return sendResponse(res, true, "Like removed successfully", { liked: false });
+    } else {
+      // Like
+      await Like.create({ userId, newsId });
+      return sendResponse(res, true, "News liked successfully", { liked: true });
+    }
+  } catch (err) {
+    console.error("Error in toggleLike:", err);
     return sendResponse(res, false, err.message, null, 500);
   }
 };
