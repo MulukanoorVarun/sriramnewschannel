@@ -3,18 +3,29 @@ import News from "../../models/News.js";
 import { sendResponse } from "../../src/utils/responseHelper.js";
 import fs from "fs";
 import path from "path";
+import { fileURLToPath } from "url";
 
-// ✅ Helper for file path
+// ✅ Setup for __dirname in ES modules
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// ✅ Helper to build full public URL for files
 const buildFileUrl = (req, filePath) => {
   if (!filePath) return null;
-  return `${req.protocol}://${req.get("host")}/${filePath}`;
+  // Ensure the "src/" part is stripped if present
+  const cleanPath = filePath.replace(/^src[\\/]/, "");
+  return `${req.protocol}://${req.get("host")}/${cleanPath}`;
+};
+
+// ✅ Helper to resolve absolute file system path
+const getAbsoluteFilePath = (relativePath) => {
+  return path.join(__dirname, "../../", relativePath);
 };
 
 // 🟢 Add Banner (Admin)
 export const addBanner = async (req, res) => {
   try {
     const { newsId, url, isActive } = req.body;
-    let bannerImage = null;
 
     if (!req.file)
       return sendResponse(res, false, "Banner image is required", null, 400);
@@ -31,7 +42,7 @@ export const addBanner = async (req, res) => {
         return sendResponse(res, false, "Invalid newsId: news not found", null, 404);
     }
 
-    bannerImage = `uploads/banners/${req.file.filename}`;
+    const bannerImage = `uploads/banners/${req.file.filename}`;
 
     const banner = await Banner.create({
       bannerImage,
@@ -40,7 +51,10 @@ export const addBanner = async (req, res) => {
       isActive: isActive ?? true,
     });
 
-    return sendResponse(res, true, "Banner added successfully", banner, 201);
+    return sendResponse(res, true, "Banner added successfully", {
+      ...banner.toJSON(),
+      bannerImage: buildFileUrl(req, bannerImage),
+    }, 201);
   } catch (err) {
     console.error("Error in addBanner:", err);
     return sendResponse(res, false, err.message, null, 500);
@@ -86,9 +100,10 @@ export const updateBanner = async (req, res) => {
     }
 
     if (req.file) {
-      // Delete old image
-      if (banner.bannerImage && fs.existsSync(banner.bannerImage)) {
-        fs.unlinkSync(banner.bannerImage);
+      // Delete old image safely
+      const oldFilePath = getAbsoluteFilePath(banner.bannerImage);
+      if (fs.existsSync(oldFilePath)) {
+        fs.unlinkSync(oldFilePath);
       }
       banner.bannerImage = `uploads/banners/${req.file.filename}`;
     }
@@ -99,7 +114,10 @@ export const updateBanner = async (req, res) => {
 
     await banner.save();
 
-    return sendResponse(res, true, "Banner updated successfully", banner);
+    return sendResponse(res, true, "Banner updated successfully", {
+      ...banner.toJSON(),
+      bannerImage: buildFileUrl(req, banner.bannerImage),
+    });
   } catch (err) {
     console.error("Error in updateBanner:", err);
     return sendResponse(res, false, err.message, null, 500);
@@ -114,8 +132,9 @@ export const deleteBanner = async (req, res) => {
 
     if (!banner) return sendResponse(res, false, "Banner not found", null, 404);
 
-    if (banner.bannerImage && fs.existsSync(banner.bannerImage)) {
-      fs.unlinkSync(banner.bannerImage);
+    const filePath = getAbsoluteFilePath(banner.bannerImage);
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
     }
 
     await banner.destroy();

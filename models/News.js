@@ -11,7 +11,8 @@ const News = sequelize.define("News", {
   videoUrl: { type: DataTypes.STRING },
 });
 
-Category.hasMany(News, { foreignKey: "categoryId" });
-News.belongsTo(Category, { foreignKey: "categoryId" });
+// ✅ Define association with alias "category"
+Category.hasMany(News, { foreignKey: "categoryId", as: "news" });
+News.belongsTo(Category, { foreignKey: "categoryId", as: "category" });
 
 export default News;

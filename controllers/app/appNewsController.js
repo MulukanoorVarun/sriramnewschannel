@@ -1,21 +1,25 @@
 import { Op, Sequelize } from "sequelize";
 import News from "../../models/News.js";
 import Bookmark from "../../models/Bookmark.js";
-import { sendResponse } from "../../src/utils/responseHelper.js";
 import NewsView from "../../models/NewsView.js";
-import Like from "../../models/Like.js";  
+import Like from "../../models/Like.js";
+import { sendResponse } from "../../src/utils/responseHelper.js";
+import { fileURLToPath } from "url";
+import path from "path";
 
-/**
- * Helper to build full file URLs
- */
+// Setup for ES Modules __dirname
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// ✅ Helper for consistent URL generation
 const buildFileUrl = (req, filePath) => {
   if (!filePath) return null;
-  return `${req.protocol}://${req.get("host")}/${filePath}`;
+  const cleanPath = filePath.replace(/^src[\\/]/, ""); // remove leading src/
+  return `${req.protocol}://${req.get("host")}/${cleanPath}`;
 };
 
 /**
- * 📰 Get all news (supports pagination, category filter, search)
- * Adds: is_bookmarked and views_count for logged-in or guest users
+ * 📰 Get all news (pagination, filter, search, trending, topmost)
  */
 export const getAllNews = async (req, res) => {
   try {
@@ -27,10 +31,10 @@ export const getAllNews = async (req, res) => {
     const offset = (page - 1) * limit;
     const { categoryId, search, type } = req.query;
 
-    // Filter
     let order = [["createdAt", "DESC"]];
     let dateFilter = {};
 
+    // Trending: by recent week + view count
     if (type === "trending") {
       const lastWeek = new Date();
       lastWeek.setDate(lastWeek.getDate() - 7);
@@ -38,6 +42,7 @@ export const getAllNews = async (req, res) => {
       order = [[Sequelize.literal("views_count"), "DESC"]];
     }
 
+    // Topmost: by likes count
     if (type === "topmost") {
       order = [[Sequelize.literal("likes_count"), "DESC"]];
     }
@@ -136,17 +141,13 @@ export const getAllNews = async (req, res) => {
   }
 };
 
-
 /**
- * 📰 Get a single news by ID (adds is_bookmarked)
+ * 📰 Get a single news by ID (adds is_bookmarked and tracks views)
  */
-
 export const getNewsById = async (req, res) => {
   try {
     const userId = req.user?.id || 0;
-    const guestId = req.headers["x-guest-id"] || null; // guest identifier from mobile app
-    console.log("Current userId:", userId, "GuestId:", guestId);
-
+    const guestId = req.headers["x-guest-id"] || null;
     const { id } = req.params;
 
     const news = await News.findByPk(id, {
@@ -165,8 +166,7 @@ export const getNewsById = async (req, res) => {
       },
     });
 
-    if (!news)
-      return sendResponse(res, false, "News not found", null, 404);
+    if (!news) return sendResponse(res, false, "News not found", null, 404);
 
     // ✅ Track unique view
     const existingView = await NewsView.findOne({
@@ -180,7 +180,6 @@ export const getNewsById = async (req, res) => {
       await NewsView.create({ newsId: id, userId, guestId });
     }
 
-    // Optionally, calculate total views dynamically
     const totalViews = await NewsView.count({ where: { newsId: id } });
 
     const json = news.toJSON();
@@ -199,29 +198,28 @@ export const getNewsById = async (req, res) => {
   }
 };
 
-
+/**
+ * ❤️ Toggle like / unlike
+ */
 export const toggleLike = async (req, res) => {
   try {
     const userId = req.user?.id;
     if (!userId) return sendResponse(res, false, "Unauthorized", null, 401);
 
     const { newsId } = req.body;
-    if (!newsId) return sendResponse(res, false, "newsId is required", null, 400);
+    if (!newsId)
+      return sendResponse(res, false, "newsId is required", null, 400);
 
-    // ✅ Check if the news item exists
     const newsExists = await News.findByPk(newsId);
     if (!newsExists)
       return sendResponse(res, false, "News not found for the provided newsId", null, 404);
 
-    // ✅ Check if the user already liked this news
     const existingLike = await Like.findOne({ where: { userId, newsId } });
 
     if (existingLike) {
-      // Unlike
       await existingLike.destroy();
       return sendResponse(res, true, "Like removed successfully", { liked: false });
     } else {
-      // Like
       await Like.create({ userId, newsId });
       return sendResponse(res, true, "News liked successfully", { liked: true });
     }
@@ -230,4 +228,3 @@ export const toggleLike = async (req, res) => {
     return sendResponse(res, false, err.message, null, 500);
   }
 };
-
