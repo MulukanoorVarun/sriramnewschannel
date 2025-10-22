@@ -9,7 +9,7 @@ const createAdmin = async () => {
   try {
     await sequelize.sync(); // make sure DB tables exist
 
-    const hashedPassword = await bcrypt.hash("admin123", 10);
+    const hashedPassword = await bcrypt.hash("Admin@123", 10);
 
     const [admin, created] = await User.findOrCreate({
       where: { email: "admin@gmail.com" },
