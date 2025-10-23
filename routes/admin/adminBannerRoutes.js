@@ -5,7 +5,8 @@ import {
   addBanner, 
   getAllBanners, 
   updateBanner, 
-  deleteBanner 
+  deleteBanner ,
+  getBannerById
 } from "../../controllers/admin/adminBannerController.js";
 
 const router = express.Router();
@@ -13,6 +14,7 @@ const router = express.Router();
 // ✅ Admin Routes (use centralized upload middleware)
 router.post("/", authenticate, authorizeRoles("admin"), upload.single("bannerImage"), addBanner);
 router.get("/", authenticate, authorizeRoles("admin"), getAllBanners);
+router.get("/:id", authenticate, authorizeRoles("admin"), getBannerById);
 router.put("/:id", authenticate, authorizeRoles("admin"), upload.single("bannerImage"), updateBanner);
 router.delete("/:id", authenticate, authorizeRoles("admin"), deleteBanner);
 

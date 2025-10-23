@@ -1,25 +1,8 @@
 import News from "../../models/News.js";
 import Category from "../../models/Category.js";
-import fs from "fs";
-import path from "path";
-import { fileURLToPath } from "url";
 import { sendResponse } from "../../src/utils/responseHelper.js";
-
-// Setup for __dirname in ES modules
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-// ✅ Build full public URL for file paths
-const buildFileUrl = (req, filePath) => {
-  if (!filePath) return null;
-  const cleanPath = filePath.replace(/^src[\\/]/, "").replace(/\\/g, "/");
-  return `${req.protocol}://${req.get("host")}/${cleanPath}`;
-};
-
-// ✅ Resolve absolute file path
-const getAbsoluteFilePath = (relativePath) => {
-  return path.join(__dirname, "../../", relativePath);
-};
+import { buildFileUrl, deleteFileIfExists } from "../../src/utils/fileHelper.js";
+import { formatDate } from "../../src/utils/dateHelper.js";
 
 // 🟢 Create News
 export const createNews = async (req, res) => {
@@ -29,46 +12,90 @@ export const createNews = async (req, res) => {
     const imageFile = req.files?.image?.[0];
     const videoFile = req.files?.video?.[0];
 
-    const imagePath = imageFile ? `uploads/news/${imageFile.filename}` : null;
-    const videoPath = videoFile ? `uploads/news/${videoFile.filename}` : null;
+    if (!title || !description) 
+      return sendResponse(res, false, "Title and description are required", null, 400);
+
+    if (!imageFile && !videoFile)
+      return sendResponse(res, false, "Either an image or a video is required", null, 400);
+
+    // Optional: validate category
+    if (categoryId) {
+      const category = await Category.findByPk(categoryId);
+      if (!category) return sendResponse(res, false, "Invalid categoryId", null, 404);
+    }
 
     const news = await News.create({
       title,
       description,
-      imageUrl: imagePath,
-      videoUrl: videoPath,
-      categoryId,
+      categoryId: categoryId || null,
+      imageUrl: imageFile ? `uploads/news/${imageFile.filename}` : null,
+      videoUrl: videoFile ? `uploads/news/${videoFile.filename}` : null,
     });
 
     return sendResponse(res, true, "News created successfully", {
       ...news.toJSON(),
-      imageUrl: buildFileUrl(req, imagePath),
-      videoUrl: buildFileUrl(req, videoPath),
+      imageUrl: buildFileUrl(req, news.imageUrl),
+      videoUrl: buildFileUrl(req, news.videoUrl),
     }, 201);
+
   } catch (err) {
-    console.error("Error in createNews:", err);
-    return sendResponse(res, false, err.message, null, 500);
+    console.error("Create News Error:", err.message);
+    return sendResponse(res, false, "Failed to create news. Please try again.", null, 500);
   }
 };
 
-// 🟡 Get All News
+// 🟡 Get All News with Pagination
 export const getAllNews = async (req, res) => {
   try {
-    const news = await News.findAll({
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const offset = (page - 1) * limit;
+
+    const { count, rows } = await News.findAndCountAll({
       include: [{ model: Category, as: "category", attributes: ["id", "name"] }],
       order: [["createdAt", "DESC"]],
+      limit,
+      offset,
     });
 
-    const formattedNews = news.map((item) => ({
-      ...item.toJSON(),
+    if (!rows || rows.length === 0) {
+      return sendResponse(res, false, "No news found", {
+        totalRecords: 0,
+        totalPages: 0,
+        currentPage: page,
+        pageSize: limit,
+        hasNextPage: false,
+        hasPrevPage: false,
+        news: [],
+      }, 404);
+    }
+
+    const formattedNews = rows.map((item) => ({
+      id: item.id,
+      title: item.title,
+      description: item.description,
       imageUrl: buildFileUrl(req, item.imageUrl),
       videoUrl: buildFileUrl(req, item.videoUrl),
+      category: item.category ? { id: item.category.id, name: item.category.name } : null,
+      createdAt: formatDate(item.createdAt),
+      updatedAt: formatDate(item.updatedAt),
     }));
 
-    return sendResponse(res, true, "News fetched successfully", formattedNews);
+    const totalPages = Math.ceil(count / limit);
+
+    return sendResponse(res, true, "News fetched successfully", {
+      totalRecords: count,
+      totalPages,
+      currentPage: page,
+      pageSize: limit,
+      hasNextPage: page < totalPages,
+      hasPrevPage: page > 1,
+      news: formattedNews,
+    });
+
   } catch (err) {
-    console.error("Error in getAllNews:", err);
-    return sendResponse(res, false, err.message, null, 500);
+    console.error("Get All News Error:", err.message);
+    return sendResponse(res, false, "Failed to fetch news. Please try again.", null, 500);
   }
 };
 
@@ -88,9 +115,10 @@ export const getNewsById = async (req, res) => {
     };
 
     return sendResponse(res, true, "News fetched successfully", formattedNews);
+
   } catch (err) {
-    console.error("Error in getNewsById:", err);
-    return sendResponse(res, false, err.message, null, 500);
+    console.error("Get News by ID Error:", err.message);
+    return sendResponse(res, false, "Failed to fetch news details", null, 500);
   }
 };
 
@@ -105,37 +133,36 @@ export const updateNews = async (req, res) => {
     const imageFile = req.files?.image?.[0];
     const videoFile = req.files?.video?.[0];
 
+    // Enforce that at least one new file is provided
+    if (!imageFile && !videoFile) 
+      return sendResponse(res, false, "Either an image or a video is required to update", null, 400);
+
+    if (categoryId) {
+      const category = await Category.findByPk(categoryId);
+      if (!category) return sendResponse(res, false, "Invalid categoryId", null, 404);
+    }
+
     // Delete old files if new ones are uploaded
-    if (imageFile && news.imageUrl) {
-      const oldImagePath = getAbsoluteFilePath(news.imageUrl);
-      if (fs.existsSync(oldImagePath)) fs.unlinkSync(oldImagePath);
-    }
-    if (videoFile && news.videoUrl) {
-      const oldVideoPath = getAbsoluteFilePath(news.videoUrl);
-      if (fs.existsSync(oldVideoPath)) fs.unlinkSync(oldVideoPath);
-    }
+    if (imageFile) deleteFileIfExists(news.imageUrl);
+    if (videoFile) deleteFileIfExists(news.videoUrl);
 
-    const imagePath = imageFile ? `uploads/news/${imageFile.filename}` : news.imageUrl;
-    const videoPath = videoFile ? `uploads/news/${videoFile.filename}` : news.videoUrl;
-
-    news.title = title;
-    news.description = description;
-    news.imageUrl = imagePath;
-    news.videoUrl = videoPath;
-    news.categoryId = categoryId;
+    news.title = title || news.title;
+    news.description = description || news.description;
+    news.categoryId = categoryId || news.categoryId;
+    news.imageUrl = imageFile ? `uploads/news/${imageFile.filename}` : news.imageUrl;
+    news.videoUrl = videoFile ? `uploads/news/${videoFile.filename}` : news.videoUrl;
 
     await news.save();
 
-    const formattedNews = {
+    return sendResponse(res, true, "News updated successfully", {
       ...news.toJSON(),
-      imageUrl: buildFileUrl(req, imagePath),
-      videoUrl: buildFileUrl(req, videoPath),
-    };
+      imageUrl: buildFileUrl(req, news.imageUrl),
+      videoUrl: buildFileUrl(req, news.videoUrl),
+    });
 
-    return sendResponse(res, true, "News updated successfully", formattedNews);
   } catch (err) {
-    console.error("Error in updateNews:", err);
-    return sendResponse(res, false, err.message, null, 500);
+    console.error("Update News Error:", err.message);
+    return sendResponse(res, false, "Failed to update news. Please try again.", null, 500);
   }
 };
 
@@ -145,20 +172,14 @@ export const deleteNews = async (req, res) => {
     const news = await News.findByPk(req.params.id);
     if (!news) return sendResponse(res, false, "News not found", null, 404);
 
-    if (news.imageUrl) {
-      const imgPath = getAbsoluteFilePath(news.imageUrl);
-      if (fs.existsSync(imgPath)) fs.unlinkSync(imgPath);
-    }
-
-    if (news.videoUrl) {
-      const vidPath = getAbsoluteFilePath(news.videoUrl);
-      if (fs.existsSync(vidPath)) fs.unlinkSync(vidPath);
-    }
+    deleteFileIfExists(news.imageUrl);
+    deleteFileIfExists(news.videoUrl);
 
     await news.destroy();
     return sendResponse(res, true, "News deleted successfully", null);
+
   } catch (err) {
-    console.error("Error in deleteNews:", err);
-    return sendResponse(res, false, err.message, null, 500);
+    console.error("Delete News Error:", err.message);
+    return sendResponse(res, false, "Failed to delete news. Please try again.", null, 500);
   }
 };
