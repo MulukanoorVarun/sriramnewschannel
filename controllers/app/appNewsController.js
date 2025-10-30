@@ -6,6 +6,7 @@ import Like from "../../models/Like.js";
 import { sendResponse } from "../../src/utils/responseHelper.js";
 import { fileURLToPath } from "url";
 import path from "path";
+import { formatDate } from "../../src/utils/dateHelper.js";
 
 // Setup for ES Modules __dirname
 const __filename = fileURLToPath(import.meta.url);
@@ -119,6 +120,8 @@ export const getAllNews = async (req, res) => {
         is_liked: Boolean(json.is_liked),
         views_count: parseInt(json.views_count) || 0,
         likes_count: parseInt(json.likes_count) || 0,
+        createdAt: formatDate(json.createdAt),
+        updatedAt: formatDate(json.updatedAt),
       };
     });
 
