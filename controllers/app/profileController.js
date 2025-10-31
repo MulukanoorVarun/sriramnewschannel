@@ -2,13 +2,15 @@ import User from "../../models/User.js";
 import { sendResponse } from "../../src/utils/responseHelper.js";
 import fs from "fs";
 import path from "path";
+import { buildFileUrl, deleteFileIfExists } from "../../src/utils/fileHelper.js";
 
-const BASE_URL = process.env.BASE_URL || "http://localhost:5000"; // use your deployed URL
+
 
 // ✅ Get Profile Details
+
 export const getProfile = async (req, res) => {
   try {
-    const userId = req.user.id;
+    const userId = req.user?.id;
 
     const user = await User.findByPk(userId, {
       attributes: ["id", "name", "email", "mobile", "role", "profilePic", "createdAt", "updatedAt"],
@@ -16,13 +18,10 @@ export const getProfile = async (req, res) => {
 
     if (!user) return sendResponse(res, false, "User not found", null, 404);
 
-    // ✅ Convert relative profilePic to full URL if exists
-    const userData = user.toJSON();
-    if (userData.profilePic) {
-      userData.profilePic = `${BASE_URL}/${userData.profilePic}`;
-    }
+    const data = user.toJSON();
+    data.profilePic = buildFileUrl(req, data.profilePic);
 
-    return sendResponse(res, true, "Profile fetched successfully", userData);
+    return sendResponse(res, true, "Profile fetched successfully", data);
   } catch (err) {
     console.error("❌ getProfile Error:", err);
     return sendResponse(res, false, "Error fetching profile", err.message, 500);
@@ -30,44 +29,76 @@ export const getProfile = async (req, res) => {
 };
 
 // ✅ Update Profile
+
 export const updateProfile = async (req, res) => {
   try {
-    const userId = req.user.id;
-    const { name, mobile } = req.body;
+    const userId = req.user?.id;
+    const { name, mobile, email } = req.body;
+
+    if (!userId)
+      return sendResponse(res, false, "Unauthorized", null, 401);
 
     const user = await User.findByPk(userId);
-    if (!user) return sendResponse(res, false, "User not found", null, 404);
+    if (!user)
+      return sendResponse(res, false, "User not found", null, 404);
 
-    // ✅ Handle profilePic upload if provided
-    if (req.file) {
-      const uploadPath = req.file.path.replace(/\\/g, "/");
+    // ✅ Check for duplicate email (if updated)
+    if (email && email !== user.email) {
+      const emailExists = await User.findOne({ where: { email } });
+      if (emailExists)
+        return sendResponse(res, false, "Email already in use", null, 400);
 
-      // Delete old file if exists
-      if (user.profilePic && fs.existsSync(user.profilePic)) {
-        fs.unlinkSync(user.profilePic);
-      }
-
-      user.profilePic = uploadPath;
+      user.email = email;
     }
 
-    user.name = name || user.name;
-    user.mobile = mobile || user.mobile;
+    // ✅ Check for duplicate mobile (if updated)
+    if (mobile && mobile !== user.mobile) {
+      const mobileExists = await User.findOne({ where: { mobile } });
+      if (mobileExists)
+        return sendResponse(res, false, "Mobile number already in use", null, 400);
 
-    await user.save();
+      user.mobile = mobile;
+    }
 
+    // ✅ Handle profile picture upload (if provided)
+    if (req.file) {
+      const newPath = req.file.path.replace(/\\/g, "/");
+
+      // Safely delete old file using helper
+      if (user.profilePic) {
+        deleteFileIfExists(user.profilePic);
+      }
+
+      user.profilePic = newPath;
+    }
+
+    // ✅ Update name (if provided)
+    if (name) user.name = name;
+
+    // ✅ Save updates safely (skip revalidation of unchanged fields)
+    await user.save({ validate: false });
+
+    // ✅ Prepare response with file URL
     const updatedUser = {
       id: user.id,
       name: user.name,
       email: user.email,
       mobile: user.mobile,
       role: user.role,
-      profilePic: user.profilePic ? `${BASE_URL}/${user.profilePic}` : null,
+      profilePic: buildFileUrl(req, user.profilePic),
     };
 
     return sendResponse(res, true, "Profile updated successfully", updatedUser);
   } catch (err) {
     console.error("❌ updateProfile Error:", err);
+    if (err.errors) {
+      err.errors.forEach((e) =>
+        console.error("👉", e.message, e.path, e.value)
+      );
+    }
     return sendResponse(res, false, "Error updating profile", err.message, 500);
   }
 };
+
+
     

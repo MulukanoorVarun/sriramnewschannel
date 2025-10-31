@@ -3,39 +3,54 @@ import Bookmark from "../../models/Bookmark.js";
 import News from "../../models/News.js";
 import User from "../../models/User.js";
 import { sendResponse } from "../../src/utils/responseHelper.js";
+import { Op, Sequelize } from "sequelize";
+import NewsView from "../../models/NewsView.js";
+import Like from "../../models/Like.js";
+import { buildFileUrl, deleteFileIfExists } from "../../src/utils/fileHelper.js";
+import { formatDate } from "../../src/utils/dateHelper.js";
 
-// ✅ Toggle bookmark (add/remove)
 export const toggleBookmark = async (req, res) => {
   try {
-    const userId = req.user?.id;
+    const userId = req.user?.id || null;
+    const guestId = req.headers["x-guest-id"] || null;
     const { newsId } = req.body;
 
-    if (!userId) {
-      return sendResponse(res, false, "Unauthorized", null, 401);
-    }
-
+    // 🧩 Validate required fields
     if (!newsId) {
       return sendResponse(res, false, "newsId is required", null, 400);
     }
 
-    // ✅ Check if news exists (avoid invalid FK errors)
+    if (!userId && !guestId) {
+      return sendResponse(res, false, "Unauthorized: missing user or guest ID", null, 401);
+    }
+
+    // ✅ Check if news exists
     const newsExists = await News.findByPk(newsId);
     if (!newsExists) {
       return sendResponse(res, false, "News not found for the provided newsId", null, 404);
     }
 
-    // ✅ Check if bookmark already exists
-    const existing = await Bookmark.findOne({ where: { userId, newsId } });
+    // ✅ Check if already bookmarked by user or guest
+    const existing = await Bookmark.findOne({
+      where: {
+        newsId,
+        ...(userId ? { userId } : { guestId }),
+      },
+    });
 
     if (existing) {
-      // Remove bookmark
+      // 🧹 Remove bookmark
       await existing.destroy();
       return sendResponse(res, true, "Bookmark removed successfully", {
         is_bookmarked: false,
       });
     } else {
-      // Add new bookmark
-      await Bookmark.create({ userId, newsId });
+      // ✅ Add bookmark
+      await Bookmark.create({
+        newsId,
+        userId,
+        guestId,
+      });
       return sendResponse(res, true, "News bookmarked successfully", {
         is_bookmarked: true,
       });
@@ -46,22 +61,122 @@ export const toggleBookmark = async (req, res) => {
   }
 };
 
+
 // ✅ Get all bookmarks for logged-in user
 export const getUserBookmarks = async (req, res) => {
   try {
-    const userId = req.user.id;
+    const userId = req.user?.id || null;
+    const guestId = req.headers["x-guest-id"] || null;
 
-    const user = await User.findOne({
-      where: { id: userId },
-      include: {
-        model: News,
-        through: { attributes: [] }, // hide Bookmark table
-      },
+    if (!userId && !guestId)
+      return sendResponse(res, false, "Unauthorized: missing user or guest ID", null, 401);
+
+    // 🧮 Pagination setup
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const offset = (page - 1) * limit;
+
+    // 🧩 Dynamic bookmark filter
+    const bookmarkWhere = userId ? { userId } : { guestId };
+
+    // 🧾 Get total count
+    const totalCount = await Bookmark.count({ where: bookmarkWhere });
+
+    // 🧠 Fetch bookmarked news list
+    const bookmarks = await Bookmark.findAll({
+      where: bookmarkWhere,
+      limit,
+      offset,
+      include: [
+        {
+          model: News,
+          attributes: {
+            include: [
+              // ✅ Is Liked
+              [
+                Sequelize.literal(`CASE 
+                  WHEN EXISTS (
+                    SELECT 1 FROM ${Like.getTableName()} AS likes
+                    WHERE likes.newsId = News.id
+                    AND ${
+                      userId
+                        ? `likes.userId = ${userId}`
+                        : `likes.guestId = '${guestId}'`
+                    }
+                  ) THEN TRUE ELSE FALSE END`),
+                "is_liked",
+              ],
+              // ✅ Is Bookmarked
+              [
+                Sequelize.literal(`CASE 
+                  WHEN EXISTS (
+                    SELECT 1 FROM ${Bookmark.getTableName()} AS bm
+                    WHERE bm.newsId = News.id
+                    AND ${
+                      userId
+                        ? `bm.userId = ${userId}`
+                        : `bm.guestId = '${guestId}'`
+                    }
+                  ) THEN TRUE ELSE FALSE END`),
+                "is_bookmarked",
+              ],
+              // ✅ Views count
+              [
+                Sequelize.literal(`(
+                  SELECT COUNT(*) FROM ${NewsView.getTableName()} AS nv
+                  WHERE nv.newsId = News.id
+                )`),
+                "views_count",
+              ],
+              // ✅ Likes count
+              [
+                Sequelize.literal(`(
+                  SELECT COUNT(*) FROM ${Like.getTableName()} AS lk
+                  WHERE lk.newsId = News.id
+                )`),
+                "likes_count",
+              ],
+            ],
+          },
+        },
+      ],
+      order: [["createdAt", "DESC"]],
     });
 
-    return sendResponse(res, true, "Bookmarks fetched successfully", user.News);
+    // 🧱 Format final output
+    const formatted = bookmarks.map((b) => {
+      const json = b.News?.toJSON?.() || {};
+      return {
+        ...json,
+        imageUrl: buildFileUrl(req, json.imageUrl),
+        videoUrl: buildFileUrl(req, json.videoUrl),
+        is_bookmarked: Boolean(json.is_bookmarked),
+        is_liked: Boolean(json.is_liked),
+        views_count: parseInt(json.views_count) || 0,
+        likes_count: parseInt(json.likes_count) || 0,
+        createdAt: formatDate(json.createdAt),
+        updatedAt: formatDate(json.updatedAt),
+      };
+    });
+
+    // 📄 Pagination meta
+    const totalPages = Math.ceil(totalCount / limit);
+
+    return sendResponse(res, true, "Bookmarks fetched successfully", {
+      total: totalCount,
+      totalPages,
+      currentPage: page,
+      limit,
+      hasNext: page < totalPages,
+      hasPrev: page > 1,
+      nextPage: page < totalPages ? page + 1 : null,
+      prevPage: page > 1 ? page - 1 : null,
+      bookmarks: formatted,
+    });
   } catch (err) {
-    return sendResponse(res, false, "Error fetching bookmarks", err.message, 500);
+    console.error("Error in getUserBookmarks:", err);
+    return sendResponse(res, false, err.message, null, 500);
   }
 };
+
 

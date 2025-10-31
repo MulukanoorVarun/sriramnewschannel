@@ -7,17 +7,7 @@ import { sendResponse } from "../../src/utils/responseHelper.js";
 import { fileURLToPath } from "url";
 import path from "path";
 import { formatDate } from "../../src/utils/dateHelper.js";
-
-// Setup for ES Modules __dirname
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-// ✅ Helper for consistent URL generation
-const buildFileUrl = (req, filePath) => {
-  if (!filePath) return null;
-  const cleanPath = filePath.replace(/^src[\\/]/, ""); // remove leading src/
-  return `${req.protocol}://${req.get("host")}/${cleanPath}`;
-};
+import { buildFileUrl, deleteFileIfExists } from "../../src/utils/fileHelper.js";
 
 /**
  * 📰 Get all news (pagination, filter, search, trending, topmost)
@@ -149,32 +139,48 @@ export const getAllNews = async (req, res) => {
  */
 export const getNewsById = async (req, res) => {
   try {
-    const userId = req.user?.id || 0;
+    const userId = req.user?.id || null;
     const guestId = req.headers["x-guest-id"] || null;
     const { id } = req.params;
+
+    if (!userId && !guestId)
+      return sendResponse(res, false, "Unauthorized: missing user or guest ID", null, 401);
+
+    // ✅ Dynamic SQL conditions for both user or guest
+    const likeCondition = userId
+      ? `likes.userId = ${userId}`
+      : `likes.guestId = '${guestId}'`;
+
+    const bookmarkCondition = userId
+      ? `bookmark.userId = ${userId}`
+      : `bookmark.guestId = '${guestId}'`;
 
     const news = await News.findByPk(id, {
       attributes: {
         include: [
+          // ✅ Like status (user or guest)
           [
             Sequelize.literal(`CASE 
               WHEN EXISTS (
                 SELECT 1 FROM ${Like.getTableName()} AS likes
                 WHERE likes.newsId = News.id
-                AND likes.userId = ${userId}
+                AND ${likeCondition}
               ) THEN TRUE ELSE FALSE END`),
             "is_liked",
           ],
+
+          // ✅ Bookmark status (user or guest)
           [
             Sequelize.literal(`CASE 
               WHEN EXISTS (
                 SELECT 1 FROM ${Bookmark.getTableName()} AS bookmark
                 WHERE bookmark.newsId = News.id
-                AND bookmark.userId = ${userId}
+                AND ${bookmarkCondition}
               ) THEN TRUE ELSE FALSE END`),
             "is_bookmarked",
           ],
-              // Likes count
+
+          // ✅ Likes count
           [
             Sequelize.literal(`(
               SELECT COUNT(*) FROM ${Like.getTableName()} AS lk
@@ -188,7 +194,7 @@ export const getNewsById = async (req, res) => {
 
     if (!news) return sendResponse(res, false, "News not found", null, 404);
 
-    // ✅ Track unique view
+    // ✅ Track unique view (for user or guest)
     const existingView = await NewsView.findOne({
       where: {
         newsId: id,
@@ -219,29 +225,51 @@ export const getNewsById = async (req, res) => {
   }
 };
 
+
 /**
  * ❤️ Toggle like / unlike
  */
 export const toggleLike = async (req, res) => {
   try {
-    const userId = req.user?.id;
-    if (!userId) return sendResponse(res, false, "Unauthorized", null, 401);
+    const userId = req.user?.id || null;
+    const guestId = req.headers["x-guest-id"] || null;
 
     const { newsId } = req.body;
-    if (!newsId)
+
+    // 🧩 Validation
+    if (!newsId) {
       return sendResponse(res, false, "newsId is required", null, 400);
+    }
 
+    if (!userId && !guestId) {
+      return sendResponse(res, false, "Unauthorized: missing user or guest ID", null, 401);
+    }
+
+    // ✅ Check if news exists
     const newsExists = await News.findByPk(newsId);
-    if (!newsExists)
+    if (!newsExists) {
       return sendResponse(res, false, "News not found for the provided newsId", null, 404);
+    }
 
-    const existingLike = await Like.findOne({ where: { userId, newsId } });
+    // ✅ Check if already liked by user or guest
+    const existingLike = await Like.findOne({
+      where: {
+        newsId,
+        ...(userId ? { userId } : { guestId }),
+      },
+    });
 
     if (existingLike) {
+      // 🧹 Remove like
       await existingLike.destroy();
       return sendResponse(res, true, "Like removed successfully", { liked: false });
     } else {
-      await Like.create({ userId, newsId });
+      // ❤️ Add new like
+      await Like.create({
+        newsId,
+        userId,
+        guestId,
+      });
       return sendResponse(res, true, "News liked successfully", { liked: true });
     }
   } catch (err) {
