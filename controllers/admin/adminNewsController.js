@@ -12,18 +12,29 @@ export const createNews = async (req, res) => {
     const imageFile = req.files?.image?.[0];
     const videoFile = req.files?.video?.[0];
 
-    if (!title || !description) 
+    // 🛑 Validate required fields
+    if (!title || !description)
       return sendResponse(res, false, "Title and description are required", null, 400);
 
-    if (!imageFile && !videoFile)
-      return sendResponse(res, false, "Either an image or a video is required", null, 400);
-
-    // Optional: validate category
-    if (categoryId) {
-      const category = await Category.findByPk(categoryId);
-      if (!category) return sendResponse(res, false, "Invalid categoryId", null, 404);
+    // 🛑 Ensure either image OR video — not both or none
+    if ((!imageFile && !videoFile) || (imageFile && videoFile)) {
+      return sendResponse(
+        res,
+        false,
+        "Please upload either an image OR a video (not both).",
+        null,
+        400
+      );
     }
 
+    // 🧩 Optional: validate category
+    if (categoryId) {
+      const category = await Category.findByPk(categoryId);
+      if (!category)
+        return sendResponse(res, false, "Invalid categoryId", null, 404);
+    }
+
+    // ✅ Create news entry
     const news = await News.create({
       title,
       description,
@@ -32,15 +43,28 @@ export const createNews = async (req, res) => {
       videoUrl: videoFile ? `uploads/news/${videoFile.filename}` : null,
     });
 
-    return sendResponse(res, true, "News created successfully", {
-      ...news.toJSON(),
-      imageUrl: buildFileUrl(req, news.imageUrl),
-      videoUrl: buildFileUrl(req, news.videoUrl),
-    }, 201);
+    // ✅ Build response
+    return sendResponse(
+      res,
+      true,
+      "News created successfully",
+      {
+        ...news.toJSON(),
+        imageUrl: buildFileUrl(req, news.imageUrl),
+        videoUrl: buildFileUrl(req, news.videoUrl),
+      },
+      201
+    );
 
   } catch (err) {
-    console.error("Create News Error:", err.message);
-    return sendResponse(res, false, "Failed to create news. Please try again.", null, 500);
+    console.error("Create News Error:", err);
+    return sendResponse(
+      res,
+      false,
+      "Failed to create news. Please try again.",
+      null,
+      500
+    );
   }
 };
 

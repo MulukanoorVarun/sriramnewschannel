@@ -159,11 +159,28 @@ export const getNewsById = async (req, res) => {
           [
             Sequelize.literal(`CASE 
               WHEN EXISTS (
+                SELECT 1 FROM ${Like.getTableName()} AS likes
+                WHERE likes.newsId = News.id
+                AND likes.userId = ${userId}
+              ) THEN TRUE ELSE FALSE END`),
+            "is_liked",
+          ],
+          [
+            Sequelize.literal(`CASE 
+              WHEN EXISTS (
                 SELECT 1 FROM ${Bookmark.getTableName()} AS bookmark
                 WHERE bookmark.newsId = News.id
-                AND bookmark.userId = ${userId || 0}
+                AND bookmark.userId = ${userId}
               ) THEN TRUE ELSE FALSE END`),
             "is_bookmarked",
+          ],
+              // Likes count
+          [
+            Sequelize.literal(`(
+              SELECT COUNT(*) FROM ${Like.getTableName()} AS lk
+              WHERE lk.newsId = News.id
+            )`),
+            "likes_count",
           ],
         ],
       },
@@ -191,6 +208,7 @@ export const getNewsById = async (req, res) => {
       imageUrl: buildFileUrl(req, json.imageUrl),
       videoUrl: buildFileUrl(req, json.videoUrl),
       is_bookmarked: Boolean(json.is_bookmarked),
+      is_liked: Boolean(json.is_liked),
       views_count: totalViews,
     };
 
