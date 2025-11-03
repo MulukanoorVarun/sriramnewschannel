@@ -67,40 +67,59 @@ export const login = async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    // 1. Find user
+    // 1️⃣ Find user
     const user = await User.findOne({ where: { email } });
     if (!user) return sendResponse(res, false, "User not found", null, 404);
 
-    // 2. Check password
+    // 2️⃣ Validate password
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch)
       return sendResponse(res, false, "Invalid credentials", null, 401);
 
+    // ================================
+    // 🔁 TOKEN GENERATION (Adaptive by ENV)
+    // ================================
+
+    const ACCESS_TOKEN_EXPIRY =
+      process.env.ACCESS_TOKEN_EXPIRY ||
+      (process.env.NODE_ENV === "development" ? "1m" : "1d");
+
+    const REFRESH_TOKEN_EXPIRY =
+      process.env.REFRESH_TOKEN_EXPIRY ||
+      (process.env.NODE_ENV === "development" ? "1d" : "7d");
+
+
+    // 3️⃣ Generate tokens
     const accessToken = jwt.sign(
       { id: user.id, role: user.role },
       process.env.JWT_SECRET,
-      { expiresIn: process.env.ACCESS_TOKEN_EXPIRY || "1d" }
+      { expiresIn: ACCESS_TOKEN_EXPIRY }
     );
 
     const refreshToken = jwt.sign(
       { id: user.id, role: user.role },
       process.env.JWT_REFRESH_SECRET,
-      { expiresIn: process.env.REFRESH_TOKEN_EXPIRY || "7d" }
+      { expiresIn: REFRESH_TOKEN_EXPIRY }
     );
 
-    // Optional: store refresh token in DB for later invalidation
+    // 4️⃣ Save refresh token in DB (for invalidation support)
     user.refreshToken = refreshToken;
-    await user.save();
+    await user.save({ validate: false });
 
-    // 5. Calculate expiry timestamps
-    // Access token expiry in milliseconds
-    const accessTokenExpiresAt = Date.now() + 1 * 24 * 60 * 60 * 1000; // 7 days
+    // 5️⃣ Calculate expiry timestamps (in milliseconds)
+    const accessTokenExpiresAt =
+      Date.now() +
+      (process.env.NODE_ENV === "development"
+        ? 1 * 60 * 1000 // 1 minute (testing)
+        : 1 * 24 * 60 * 60 * 1000); // 1 day (production)
 
-    // Refresh token expiry in milliseconds
-    const refreshTokenExpiresAt = Date.now() + 7 * 24 * 60 * 60 * 1000; // 7 days
+    const refreshTokenExpiresAt =
+      Date.now() +
+      (process.env.NODE_ENV === "development"
+        ? 1 * 24 * 60 * 60 * 1000 // 1 day (testing)
+        : 7 * 24 * 60 * 60 * 1000); // 7 days (production)
 
-
-    // 6. Send response
+    // 6️⃣ Send response
     return sendResponse(res, true, "Login successful", {
       id: user.id,
       name: user.name,
@@ -112,10 +131,11 @@ export const login = async (req, res) => {
       refreshTokenExpiresAt,
     });
   } catch (err) {
-    console.error(err);
+    console.error("❌ Login Error:", err);
     return sendResponse(res, false, err.message, null, 500);
   }
 };
+
 
 
 export const refreshAccessToken = async (req, res) => {
@@ -140,34 +160,58 @@ export const refreshAccessToken = async (req, res) => {
       return sendResponse(res, false, "Refresh token mismatch or user not found", null, 401);
     }
 
+    // ================================
+    // 🔁 TOKEN GENERATION
+    // ================================
+
+    // ⚙️ Choose expiry durations (testing vs production)
+    const ACCESS_TOKEN_EXPIRY =
+      process.env.ACCESS_TOKEN_EXPIRY ||
+      (process.env.NODE_ENV === "development" ? "1m" : "1d");
+
+    const REFRESH_TOKEN_EXPIRY =
+      process.env.REFRESH_TOKEN_EXPIRY ||
+      (process.env.NODE_ENV === "development" ? "1d" : "7d");
+
+
     // 4️⃣ Generate new tokens
     const newAccessToken = jwt.sign(
       { id: user.id, role: user.role },
       process.env.JWT_SECRET,
-      { expiresIn: process.env.ACCESS_TOKEN_EXPIRY || "1d" }
+      { expiresIn: ACCESS_TOKEN_EXPIRY }
     );
 
     const newRefreshToken = jwt.sign(
       { id: user.id, role: user.role },
       process.env.JWT_REFRESH_SECRET,
-      { expiresIn: process.env.REFRESH_TOKEN_EXPIRY || "7d" }
+      { expiresIn: REFRESH_TOKEN_EXPIRY }
     );
 
-    // 5️⃣ Rotate refresh token in DB
+    // ✅ Save new refresh token in DB
     user.refreshToken = newRefreshToken;
     await user.save({ validate: false });
 
-    // 6️⃣ Compute expiry timestamps
-    const accessTokenExpiresAt = Date.now() + 1 * 24 * 60 * 60 * 1000; // 1 day
-    const refreshTokenExpiresAt = Date.now() + 7 * 24 * 60 * 60 * 1000; // 7 days
+    // 5️⃣ Calculate expiry timestamps (in ms)
+    const accessTokenExpiresAt = Date.now() + (
+      process.env.NODE_ENV === "development"
+        ? 1 * 60 * 1000 // 1 minute (testing)
+        : 1 * 24 * 60 * 60 * 1000 // 1 day (production)
+    );
 
-    // 7️⃣ Respond with new tokens
+    const refreshTokenExpiresAt = Date.now() + (
+      process.env.NODE_ENV === "development"
+        ? 1 * 24 * 60 * 60 * 1000 // 1 day (testing)
+        : 7 * 24 * 60 * 60 * 1000 // 7 days (production)
+    );
+
+    // 6️⃣ Send refreshed tokens
     return sendResponse(res, true, "Access token refreshed successfully", {
       accessToken: newAccessToken,
       accessTokenExpiresAt,
       refreshToken: newRefreshToken,
       refreshTokenExpiresAt,
     });
+
   } catch (err) {
     console.error("❌ refreshAccessToken Error:", err);
     return sendResponse(res, false, "Failed to refresh access token", err.message, 500);
