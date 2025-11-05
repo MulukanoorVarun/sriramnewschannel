@@ -57,6 +57,6 @@ app.get("/",(req,res)=>{
 })
 
 // Sync database
-sequelize.sync({ alter: true }).then(() => console.log("Database synced ✅"));
+sequelize.sync({ alter: false }).then(() => console.log("Database synced ✅"));
 
 export default app;
