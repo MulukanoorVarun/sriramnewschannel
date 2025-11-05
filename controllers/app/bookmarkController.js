@@ -9,32 +9,42 @@ import Like from "../../models/Like.js";
 import { buildFileUrl, deleteFileIfExists } from "../../src/utils/fileHelper.js";
 import { formatDate } from "../../src/utils/dateHelper.js";
 
+
+
 export const toggleBookmark = async (req, res) => {
   try {
-    const userId = req.user?.id || null;
-    const guestId = req.headers["x-guest-id"] || null;
+    console.log("🧾 Body:", req.body);
+    console.log("🧾 User:", req.user);
+
+    const userId = req.user?.id;
     const { newsId } = req.body;
 
     // 🧩 Validate required fields
+    if (!userId) {
+      return sendResponse(res, false, "Unauthorized: missing user ID", null, 401);
+    }
+
     if (!newsId) {
       return sendResponse(res, false, "newsId is required", null, 400);
     }
 
-    if (!userId && !guestId) {
-      return sendResponse(res, false, "Unauthorized: missing user or guest ID", null, 401);
+    // ✅ Ensure the user exists
+    const userExists = await User.findByPk(userId);
+    if (!userExists) {
+      return sendResponse(res, false, "Invalid user: not found", null, 400);
     }
 
-    // ✅ Check if news exists
+    // ✅ Ensure the news exists
     const newsExists = await News.findByPk(newsId);
     if (!newsExists) {
       return sendResponse(res, false, "News not found for the provided newsId", null, 404);
     }
 
-    // ✅ Check if already bookmarked by user or guest
+    // ✅ Check if bookmark already exists
     const existing = await Bookmark.findOne({
       where: {
         newsId,
-        ...(userId ? { userId } : { guestId }),
+        userId,
       },
     });
 
@@ -49,15 +59,26 @@ export const toggleBookmark = async (req, res) => {
       await Bookmark.create({
         newsId,
         userId,
-        guestId,
       });
       return sendResponse(res, true, "News bookmarked successfully", {
         is_bookmarked: true,
       });
     }
   } catch (err) {
-    console.error("Error in toggleBookmark:", err);
-    return sendResponse(res, false, err.message, null, 500);
+    console.error("❌ Error in toggleBookmark:", err);
+
+    // Handle DB constraint errors gracefully
+    if (err.name === "SequelizeDatabaseError" && err.message.includes("foreign key")) {
+      return sendResponse(
+        res,
+        false,
+        "Invalid user or news reference: foreign key constraint failed",
+        null,
+        400
+      );
+    }
+
+    return sendResponse(res, false, err.message || "Internal server error", null, 500);
   }
 };
 

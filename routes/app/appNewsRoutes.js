@@ -12,6 +12,6 @@ router.get("/", optionalAuthenticate, getAllNews);
 
 // Get single news details by ID
 router.get("/:id", optionalAuthenticate, getNewsById);
-router.post("/toggle-like", authenticate, toggleLike);
+router.post("/toggle-like", optionalAuthenticate, toggleLike);
 
 export default router;
