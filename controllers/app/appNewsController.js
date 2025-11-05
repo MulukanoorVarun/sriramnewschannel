@@ -146,19 +146,30 @@ export const getNewsById = async (req, res) => {
     if (!userId && !guestId)
       return sendResponse(res, false, "Unauthorized: missing user or guest ID", null, 401);
 
-    // ✅ Dynamic SQL conditions for both user or guest
+    // ✅ Like condition works for both users and guests
     const likeCondition = userId
       ? `likes.userId = ${userId}`
       : `likes.guestId = '${guestId}'`;
 
-    const bookmarkCondition = userId
-      ? `bookmark.userId = ${userId}`
-      : `bookmark.guestId = '${guestId}'`;
+    // Only include bookmark condition if user is authenticated
+    const bookmarkLiteral = userId
+      ? [
+          [
+            Sequelize.literal(`CASE 
+              WHEN EXISTS (
+                SELECT 1 FROM ${Bookmark.getTableName()} AS bookmark
+                WHERE bookmark.newsId = News.id
+                AND bookmark.userId = ${userId}
+              ) THEN TRUE ELSE FALSE END`),
+            "is_bookmarked",
+          ],
+        ]
+      : [];
 
     const news = await News.findByPk(id, {
       attributes: {
         include: [
-          // ✅ Like status (user or guest)
+          // ✅ Like status
           [
             Sequelize.literal(`CASE 
               WHEN EXISTS (
@@ -169,16 +180,8 @@ export const getNewsById = async (req, res) => {
             "is_liked",
           ],
 
-          // ✅ Bookmark status (user or guest)
-          [
-            Sequelize.literal(`CASE 
-              WHEN EXISTS (
-                SELECT 1 FROM ${Bookmark.getTableName()} AS bookmark
-                WHERE bookmark.newsId = News.id
-                AND ${bookmarkCondition}
-              ) THEN TRUE ELSE FALSE END`),
-            "is_bookmarked",
-          ],
+          // ✅ Bookmark status (only for authenticated users)
+          ...bookmarkLiteral,
 
           // ✅ Likes count
           [
@@ -194,7 +197,7 @@ export const getNewsById = async (req, res) => {
 
     if (!news) return sendResponse(res, false, "News not found", null, 404);
 
-    // ✅ Track unique view (for user or guest)
+    // ✅ Track unique view
     const existingView = await NewsView.findOne({
       where: {
         newsId: id,
@@ -213,7 +216,7 @@ export const getNewsById = async (req, res) => {
       ...json,
       imageUrl: buildFileUrl(req, json.imageUrl),
       videoUrl: buildFileUrl(req, json.videoUrl),
-      is_bookmarked: Boolean(json.is_bookmarked),
+      is_bookmarked: userId ? Boolean(json.is_bookmarked) : false, // guests always false
       is_liked: Boolean(json.is_liked),
       views_count: totalViews,
     };
@@ -233,10 +236,9 @@ export const toggleLike = async (req, res) => {
   try {
     const userId = req.user?.id || null;
     const guestId = req.headers["x-guest-id"] || null;
-
     const { newsId } = req.body;
 
-    // 🧩 Validation
+    // Validation
     if (!newsId) {
       return sendResponse(res, false, "newsId is required", null, 400);
     }
@@ -245,13 +247,13 @@ export const toggleLike = async (req, res) => {
       return sendResponse(res, false, "Unauthorized: missing user or guest ID", null, 401);
     }
 
-    // ✅ Check if news exists
+    // Check news existence
     const newsExists = await News.findByPk(newsId);
     if (!newsExists) {
-      return sendResponse(res, false, "News not found for the provided newsId", null, 404);
+      return sendResponse(res, false, "News not found", null, 404);
     }
 
-    // ✅ Check if already liked by user or guest
+    // Check existing like
     const existingLike = await Like.findOne({
       where: {
         newsId,
@@ -260,20 +262,27 @@ export const toggleLike = async (req, res) => {
     });
 
     if (existingLike) {
-      // 🧹 Remove like
+      // Remove like
       await existingLike.destroy();
       return sendResponse(res, true, "Like removed successfully", { liked: false });
     } else {
-      // ❤️ Add new like
-      await Like.create({
-        newsId,
-        userId,
-        guestId,
-      });
+      // Add like (only include valid IDs)
+      const likeData = { newsId };
+      if (userId) likeData.userId = userId;
+      if (guestId) likeData.guestId = guestId;
+
+      await Like.create(likeData);
       return sendResponse(res, true, "News liked successfully", { liked: true });
     }
   } catch (err) {
     console.error("Error in toggleLike:", err);
-    return sendResponse(res, false, err.message, null, 500);
+
+    // Handle foreign key issues gracefully
+    if (err.name === "SequelizeDatabaseError" && err.message.includes("foreign key")) {
+      return sendResponse(res, false, "Invalid user reference or news reference", null, 400);
+    }
+
+    return sendResponse(res, false, err.message || "Internal server error", null, 500);
   }
 };
+
