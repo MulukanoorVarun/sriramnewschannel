@@ -52,6 +52,10 @@ app.use("/api/admin/users", adminUserRoutes);
 app.use("/api/admin/staff", adminStaffRoutes);
 app.use("/api/admin/dashboard", adminDashboardRoutes);
 
+app.get("/",(req,res)=>{
+    res.send("hello")
+})
+
 // Sync database
 sequelize.sync({ alter: true }).then(() => console.log("Database synced ✅"));
 
