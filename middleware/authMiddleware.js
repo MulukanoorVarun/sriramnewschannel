@@ -1,5 +1,6 @@
 import jwt from "jsonwebtoken";
 import dotenv from "dotenv";
+import { sendResponse } from "../src/utils/responseHelper.js";
 dotenv.config();
 
 /**
@@ -9,26 +10,41 @@ dotenv.config();
 export const authenticate = (req, res, next) => {
   try {
     const authHeader = req.headers.authorization;
-    if (!authHeader) return res.status(403).json({ message: "Token missing" });
+
+    if (!authHeader) {
+      return sendResponse(res, false, "Authorization header missing", null, 403);
+    }
 
     const token = authHeader.split(" ")[1];
-    if (!token) return res.status(403).json({ message: "Token missing" });
+    if (!token) {
+      return sendResponse(res, false, "Token missing or malformed", null, 403);
+    }
 
+    // 🔑 Verify JWT token
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
     // Attach user info to request
     req.user = decoded;
 
-    // Optional debug log
-    console.log("Authenticated user:", req.user);
+    // Optional: Debug log (safe to remove in production)
+    console.log("✅ Authenticated user:", req.user);
 
     next();
   } catch (err) {
     console.error("Authentication error:", err.message);
-    return res.status(401).json({ message: "Invalid or expired token" });
+
+    // Token verification failure (expired / invalid / malformed)
+    return sendResponse(
+      res,
+      false,
+      err.name === "TokenExpiredError"
+        ? "Session expired. Please log in again."
+        : "Invalid or expired token",
+      null,
+      401
+    );
   }
 };
-
 
 export const optionalAuthenticate = (req, res, next) => {
   const token = req.headers.authorization?.split(" ")[1];

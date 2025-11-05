@@ -19,6 +19,7 @@ import adminNewsRoutes from "./routes/admin/adminNewsRoutes.js";
 import adminUserRoutes from "./routes/admin/adminUserRoutes.js";
 import adminBannerRoutes from "./routes/admin/adminBannerRoutes.js";
 import adminStaffRoutes from "./routes/admin/adminStaffRoutes.js";
+import adminDashboardRoutes from "./routes/admin/adminDashboardRoutes.js";
 
 dotenv.config();
 const app = express();
@@ -49,6 +50,7 @@ app.use("/api/admin/news", adminNewsRoutes);
 app.use("/api/admin/banners", adminBannerRoutes);
 app.use("/api/admin/users", adminUserRoutes);
 app.use("/api/admin/staff", adminStaffRoutes);
+app.use("/api/admin/dashboard", adminDashboardRoutes);
 
 // Sync database
 sequelize.sync({ alter: true }).then(() => console.log("Database synced ✅"));

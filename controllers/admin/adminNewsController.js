@@ -4,6 +4,8 @@ import User from "../../models/User.js";
 import { sendResponse } from "../../src/utils/responseHelper.js";
 import { buildFileUrl, deleteFileIfExists } from "../../src/utils/fileHelper.js";
 import { formatDate } from "../../src/utils/dateHelper.js";
+import { Op } from "sequelize";
+
 
 // 🟢 Create News
 export const createNews = async (req, res) => {
@@ -95,32 +97,62 @@ export const createNews = async (req, res) => {
   }
 };
 
-// 🟡 Get All News with Pagination
+// 🟡 Get All News with Filters + Pagination
 export const getAllNews = async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
     const offset = (page - 1) * limit;
 
+    const { search, categoryId, recent } = req.query;
+
+    // 🔍 Filters setup
+    const whereClause = {};
+
+    // Search filter (title or description)
+    if (search) {
+      whereClause[Op.or] = [
+        { title: { [Op.like]: `%${search}%` } },
+        { description: { [Op.like]: `%${search}%` } },
+      ];
+    }
+
+    // Category filter
+    if (categoryId) {
+      whereClause.categoryId = categoryId;
+    }
+
+    // Sorting (recent = true means latest first)
+    const order = recent === "true" ? [["createdAt", "DESC"]] : [["createdAt", "ASC"]];
+
+    // ✅ Fetch data
     const { count, rows } = await News.findAndCountAll({
+      where: whereClause,
       include: [{ model: Category, as: "category", attributes: ["id", "name"] }],
-      order: [["createdAt", "DESC"]],
+      order,
       limit,
       offset,
     });
 
     if (!rows || rows.length === 0) {
-      return sendResponse(res, false, "No news found", {
-        totalRecords: 0,
-        totalPages: 0,
-        currentPage: page,
-        pageSize: limit,
-        hasNextPage: false,
-        hasPrevPage: false,
-        news: [],
-      }, 404);
+      return sendResponse(
+        res,
+        false,
+        "No news found",
+        {
+          totalRecords: 0,
+          totalPages: 0,
+          currentPage: page,
+          pageSize: limit,
+          hasNextPage: false,
+          hasPrevPage: false,
+          news: [],
+        },
+        404
+      );
     }
 
+    // ✅ Format data
     const formattedNews = rows.map((item) => ({
       id: item.id,
       title: item.title,
@@ -134,6 +166,7 @@ export const getAllNews = async (req, res) => {
 
     const totalPages = Math.ceil(count / limit);
 
+    // ✅ Final response
     return sendResponse(res, true, "News fetched successfully", {
       totalRecords: count,
       totalPages,
@@ -143,13 +176,11 @@ export const getAllNews = async (req, res) => {
       hasPrevPage: page > 1,
       news: formattedNews,
     });
-
   } catch (err) {
     console.error("Get All News Error:", err.message);
     return sendResponse(res, false, "Failed to fetch news. Please try again.", null, 500);
   }
 };
-
 // 🟠 Get News by ID
 export const getNewsById = async (req, res) => {
   try {
